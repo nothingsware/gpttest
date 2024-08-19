@@ -3,15 +3,31 @@ const OpenAI = require('openai');
 const path = require('path');
 const dotenv = require('dotenv');
 const cache = require('memory-cache');
+const { AutoModelForCausalLM, AutoTokenizer, pipeline } = require('transformers'); // Import transformers
 
 dotenv.config({ path: './info.env' });
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Initialize OpenAI API client
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
 });
+
+// Initialize GPT-J model and tokenizer
+const gptjModelName = "EleutherAI/gpt-j-6B";
+let gptj_pipeline;
+
+(async () => {
+    try {
+        const tokenizer = await AutoTokenizer.from_pretrained(gptjModelName);
+        const model = await AutoModelForCausalLM.from_pretrained(gptjModelName);
+        gptj_pipeline = pipeline("text-generation", model, tokenizer);
+    } catch (error) {
+        console.error(`Error loading GPT-J model: ${error.message}`);
+    }
+})();
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -21,7 +37,7 @@ app.get('/', (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
-    const userInput = req.body.message.trim();
+    const userInput = req.body.message?.trim();
     const model = req.body.model || "gpt-3.5-turbo";
 
     if (!userInput) {
@@ -41,10 +57,11 @@ app.post('/api/chat', async (req, res) => {
                 max_tokens: 150,
                 temperature: 0.7,
             });
-            aiResponse = response.choices[0].message.content;
+
+            aiResponse = response.choices[0]?.message?.content || "No response content";
         }
 
-        cache.put(userInput, aiResponse, 10 * 60 * 1000);
+        cache.put(userInput, aiResponse, 10 * 60 * 1000); // Cache for 10 minutes
 
         res.json({ reply: aiResponse });
     } catch (error) {
@@ -55,8 +72,10 @@ app.post('/api/chat', async (req, res) => {
 
 async function generateGPTJResponse(prompt) {
     try {
-        const response = gptj_pipeline(prompt, max_length=100)[0]['generated_text'];
-        return response;
+        if (!gptj_pipeline) throw new Error("GPT-J pipeline not initialized");
+
+        const response = await gptj_pipeline(prompt, { max_length: 100 });
+        return response[0]?.generated_text || "No generated text";
     } catch (error) {
         console.error("GPT-J Error:", error.message || error);
         throw new Error("Failed to generate response using GPT-J.");
@@ -66,12 +85,12 @@ async function generateGPTJResponse(prompt) {
 async function generateChatGPT3Response(prompt) {
     try {
         const response = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo",  
+            model: "gpt-3.5-turbo",
             messages: [{ role: "user", content: prompt }],
             max_tokens: 150,
             temperature: 0.7,
         });
-        return response.choices[0].message.content;
+        return response.choices[0]?.message?.content || "No response content";
     } catch (error) {
         console.error("ChatGPT-3 Error:", error.message || error);
         throw new Error("Failed to generate response using ChatGPT-3.");
